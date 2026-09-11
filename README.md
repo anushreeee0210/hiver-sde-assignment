@@ -1,81 +1,187 @@
 # AppleSupport Customer Support Reply System
 
-An NLP-based customer support reply system built for the Hiver SDE
-take-home assignment.
+An NLP-based customer-support reply system built for the **Hiver SDE
+Take-Home Assignment**.
 
-The system uses the public Customer Support on Twitter dataset, extracts
-conversations involving AppleSupport, identifies the customer's support
-intent, retrieves a relevant historical AppleSupport response using
-TF-IDF similarity and keyword-based reranking, and exposes the result
-through a FastAPI REST API.
+The system focuses on the **AppleSupport** brand from the Customer
+Support on Twitter dataset. It extracts customer → support
+conversations, identifies the support topic, retrieves similar
+historical AppleSupport cases using TF-IDF, reranks candidates using
+domain-specific lexical signals, and exposes the final grounded reply
+through a FastAPI API.
 
-## Features
+------------------------------------------------------------------------
 
--   Extracts AppleSupport conversations from the Twitter
-    customer-support dataset.
--   Builds direct customer-message to AppleSupport-response pairs.
--   Uses a 10-intent support taxonomy.
--   Creates a 200-example golden evaluation set.
--   Uses TF-IDF with unigram and bigram features.
--   Uses cosine similarity for retrieval.
--   Uses keyword/domain reranking to improve relevance.
--   Cleans Twitter mentions from retrieved responses.
--   Returns grounded support guidance from similar historical
-    AppleSupport cases.
--   Provides a FastAPI REST API with Swagger documentation.
+# 1. Problem Framing
 
-## Architecture
+## What does "good" mean for AppleSupport?
+
+For this project, a good support reply should:
+
+1.  **Address the customer's actual issue** rather than just matching
+    generic words.
+2.  **Be grounded in historical AppleSupport guidance** from the
+    dataset.
+3.  **Avoid hallucinating troubleshooting steps** that are not supported
+    by the retrieved evidence.
+4.  **Be concise and professional**, similar to real customer-support
+    interactions.
+5.  **Route different Apple support problems correctly**, such as
+    battery, Wi-Fi, iCloud, App Store purchases, Mac, and Messages.
+6.  **Handle noisy social-media language**, including abbreviations,
+    spelling variations, mentions, URLs, and short messages.
+
+## What I chose not to build
+
+To keep the scope focused on the assignment, this project does not
+attempt to build:
+
+-   A complete Apple customer-service platform.
+-   A production authentication system.
+-   A live Apple support integration.
+-   Automated refunds, purchases, account changes, or other real-world
+    actions.
+-   A fully autonomous LLM agent.
+-   A production-scale vector database.
+-   A frontend dashboard.
+-   A system that invents troubleshooting instructions without evidence.
+
+The goal is a **grounded support-reply retrieval system**, not a
+replacement for Apple's complete support infrastructure.
+
+------------------------------------------------------------------------
+
+# 2. Approach
 
 ``` text
-Customer Query
-      |
-      v
-Intent Detection
-      |
-      v
-TF-IDF Retrieval
-      |
-      v
-Candidate Retrieval
-      |
-      v
-Keyword / Domain Reranking
-      |
-      v
-Best Historical Support Response
-      |
-      v
-Response Cleaning
-      |
-      v
-FastAPI JSON Response
+                 Customer Query
+                       |
+                       v
+                Text Cleaning
+                       |
+                       v
+                Intent Routing
+                       |
+                       v
+               TF-IDF Retrieval
+                       |
+                       v
+              Candidate Responses
+                       |
+                       v
+             Domain Keyword Reranking
+                       |
+                       v
+              Best Historical Case
+                       |
+                       v
+             Response Cleaning
+                       |
+                       v
+                 FastAPI API
 ```
 
-## Dataset
+The main design principle is:
 
-Source: Customer Support on Twitter by Thought Vector.
+> Retrieve evidence first, then return a response grounded in that
+> evidence.
+
+This reduces the risk of generating unsupported advice.
+
+------------------------------------------------------------------------
+
+# 3. Dataset
+
+Dataset:
+
+**Customer Support on Twitter** by Thought Vector
 
 Kaggle:
 https://www.kaggle.com/datasets/thoughtvector/customer-support-on-twitter
 
 The original dataset contains approximately 2.8 million tweets and
-fields including `tweet_id`, `author_id`, `inbound`, `created_at`,
-`text`, `response_tweet_id`, and `in_response_to_tweet_id`.
+includes:
 
-This project filters the dataset to AppleSupport conversations and
-creates direct customer-to-support pairs.
+-   `tweet_id`
+-   `author_id`
+-   `inbound`
+-   `created_at`
+-   `text`
+-   `response_tweet_id`
+-   `in_response_to_tweet_id`
 
-### Data processing
+The project filters the dataset to conversations involving:
 
-1.  Extract AppleSupport responses.
-2.  Find tweets related to those responses.
-3.  Identify customer messages.
-4.  Match each customer message with the corresponding AppleSupport
-    response.
-5.  Remove duplicate/invalid/very short retrieval examples.
-6.  Build the retrieval index.
+``` text
+AppleSupport
+```
 
-## Intent Taxonomy
+The original raw dataset should be downloaded separately and placed at:
+
+``` text
+data/twcs.csv
+```
+
+Because the raw dataset is large, it should not be committed to GitHub.
+
+------------------------------------------------------------------------
+
+# 4. Data Preparation
+
+The preprocessing pipeline performs the following:
+
+### Step 1 --- Extract AppleSupport responses
+
+``` powershell
+python src/extract_applesupport.py
+```
+
+Creates:
+
+``` text
+data/applesupport_raw.csv
+```
+
+### Step 2 --- Extract related conversations
+
+``` powershell
+python src/extract_applesupport_conversations.py
+```
+
+Creates:
+
+``` text
+data/applesupport_conversations.csv
+```
+
+### Step 3 --- Build customer → AppleSupport pairs
+
+``` powershell
+python src/create_support_pairs.py
+```
+
+Creates:
+
+``` text
+data/applesupport_pairs.csv
+```
+
+The resulting dataset contains direct pairs such as:
+
+``` text
+Customer:
+My wifi keeps disconnecting on my phone.
+
+AppleSupport:
+We'd be happy to help you out...
+```
+
+------------------------------------------------------------------------
+
+# 5. Intent Taxonomy
+
+The project uses 10 support intents discovered from the AppleSupport
+conversations:
 
   -----------------------------------------------------------------------
   Intent                              Description
@@ -83,20 +189,19 @@ creates direct customer-to-support pairs.
   `software_ios`                      iOS updates, software problems,
                                       freezing and lagging
 
-  `app_issues`                        Problems with applications and app
-                                      behavior
+  `app_issues`                        Application-related problems
 
   `battery_charging`                  Battery drain, charging and charger
                                       issues
 
   `hardware_device`                   Screen, camera, keyboard, speaker
-                                      and device hardware
+                                      and hardware issues
 
   `wifi_connectivity`                 Wi-Fi, wireless, internet and
                                       network issues
 
   `icloud_apple_id`                   iCloud, Apple ID, passwords and
-                                      login/account issues
+                                      login issues
 
   `app_store_purchases`               App Store, iTunes, purchases,
                                       refunds, payments and subscriptions
@@ -105,38 +210,94 @@ creates direct customer-to-support pairs.
                                       issues
 
   `notifications_messages`            Notifications, Messages and
-                                      iMessage issues
+                                      iMessage problems
 
   `security_fraud`                    Phishing, scams, suspicious emails
                                       and security issues
   -----------------------------------------------------------------------
 
-## Golden Evaluation Set
+------------------------------------------------------------------------
 
-`data/golden_set.csv` contains 200 examples, with 20 examples per
-intent.
+# 6. Golden Evaluation Set
 
-The current labels were created using keyword-assisted labeling and
-should be considered a baseline rather than a fully human-validated
-benchmark.
+The project contains:
 
-## Retrieval
+``` text
+data/golden_set.csv
+```
 
-The retrieval system uses:
+with **200 examples**, which is within the required 150--250 example
+range.
 
-### TF-IDF
+The examples were sampled from AppleSupport customer messages and
+distributed across the 10 support intents, with approximately 20
+examples per intent.
 
--   Unigrams and bigrams
+## Sampling
+
+Examples were selected from the processed AppleSupport customer/support
+pairs after basic cleaning and duplicate removal.
+
+The sampling was designed to cover common support areas including:
+
+-   Battery
+-   Wi-Fi
+-   iCloud
+-   App Store purchases
+-   iOS
+-   Apps
+-   Mac
+-   Hardware
+-   Notifications
+-   Security
+
+## Labelling
+
+The current version of the set was initially created using
+**keyword-assisted labeling** based on the intent taxonomy and topic
+analysis.
+
+Important:
+
+> The current `golden_set.csv` should be treated as a **draft evaluation
+> set until all 200 labels have been manually reviewed**. It would be
+> misleading to describe the existing file as fully hand-labelled
+> without completing that review.
+
+For a final submission, the recommended process is:
+
+1.  Randomly sample 150--250 examples.
+2.  Hide the automatically predicted label.
+3.  Manually assign exactly one intent.
+4.  Review ambiguous examples a second time.
+5.  Freeze the final CSV.
+6.  Never use the golden set to train the final retrieval model.
+
+This prevents evaluation leakage.
+
+------------------------------------------------------------------------
+
+# 7. Retrieval Model
+
+The main retrieval model uses:
+
+## TF-IDF
+
+Configuration:
+
+-   Unigrams
+-   Bigrams
 -   Up to 100,000 features
 
-### Cosine similarity
+## Cosine similarity
 
-The customer query is compared against historical AppleSupport customer
-messages.
+The customer query is transformed into a TF-IDF vector and compared with
+historical AppleSupport customer messages.
 
-### Keyword reranking
+## Keyword reranking
 
-Retrieved candidates are reranked using important domain terms such as:
+The top retrieved candidates are reranked using important domain terms
+such as:
 
 ``` text
 battery
@@ -154,29 +315,807 @@ screen
 camera
 ```
 
-This helps avoid generic keyword matches. For example, an App Store
-refund query should prefer an App Store/refund case over an unrelated
-laptop refund case.
+This prevents generic word matches from dominating the result.
 
-## Response Generation
+For example:
 
-The system selects the most relevant historical AppleSupport response
-and cleans it before returning it.
+``` text
+I want a refund for an App Store purchase
+```
 
-Cleaning includes:
+should retrieve an App Store/refund case rather than:
 
--   Removing Twitter `@mentions`
--   Normalizing whitespace
--   Preserving useful support guidance
--   Avoiding unsupported troubleshooting instructions
+``` text
+I want a refund for my laptop
+```
 
-The response is therefore grounded in the historical support dataset.
+------------------------------------------------------------------------
 
-# Project Structure
+# 8. Response Generation
+
+The system does not invent unsupported troubleshooting steps.
+
+Instead, it:
+
+1.  Detects the likely support intent.
+2.  Retrieves similar historical AppleSupport cases.
+3.  Reranks the candidates.
+4.  Selects the strongest historical support response.
+5.  Cleans Twitter handles and formatting.
+6.  Returns the grounded response.
+
+Example:
+
+``` text
+Customer:
+I want a refund for an App Store purchase
+```
+
+Retrieved historical issue:
+
+``` text
+Just got conned into an app store purchase which didnt give me
+an option to say no. How do I get a refund?
+```
+
+Retrieved support guidance:
+
+``` text
+We'd like to get you pointed in the right direction.
+You'll want to contact our iTunes Advisors...
+```
+
+------------------------------------------------------------------------
+
+# 9. Evaluation Harness
+
+The project includes:
+
+``` text
+src/evaluate_retriever.py
+src/analyze_errors.py
+```
+
+The current automated harness evaluates the 200-example set and reports
+intent-routing accuracy.
+
+Current baseline result:
+
+``` text
+Total examples: 200
+Correct: 142
+Incorrect: 58
+Intent accuracy: 71.00%
+```
+
+The error-analysis script groups mistakes by expected and predicted
+intent.
+
+## Important distinction
+
+Intent accuracy is **not the same as reply quality**.
+
+A reply can be useful even if the internal intent label is imperfect.
+
+Conversely, the correct intent does not guarantee that the retrieved
+reply is relevant.
+
+Therefore the final evaluation should measure both:
+
+``` text
+Intent routing
++
+Reply relevance / groundedness
+```
+
+------------------------------------------------------------------------
+
+# 10. LLM-as-Judge Evaluation
+
+A complete reply-quality evaluation should use an LLM judge in addition
+to automated metrics.
+
+The proposed judge rubric is:
+
+  Criterion                              Score
+  ------------------------------------ -------
+  Issue relevance                         0--2
+  Groundedness in retrieved evidence      0--2
+  Helpfulness                             0--2
+  Professional tone                       0--2
+  Hallucination / unsupported claims      0--2
+
+Total:
+
+``` text
+10 points
+```
+
+## Judge prompt
+
+A judge can be given:
+
+``` text
+Customer query:
+{query}
+
+Retrieved historical customer issue:
+{retrieved_issue}
+
+Retrieved AppleSupport response:
+{retrieved_response}
+
+Evaluate the proposed reply.
+
+Score:
+1. Relevance: 0-2
+2. Groundedness: 0-2
+3. Helpfulness: 0-2
+4. Professional tone: 0-2
+5. Hallucination/unsupported claims: 0-2
+
+Return:
+{
+  "score": 0-10,
+  "reason": "...",
+  "hallucination": true/false
+}
+```
+
+## Human agreement
+
+For a proper final benchmark, a sample of the same replies should also
+be rated by a human using the identical rubric.
+
+Agreement can then be reported using:
+
+-   Pearson/Spearman correlation for total scores.
+-   Mean absolute error between human and LLM scores.
+-   Agreement rate on acceptable/unacceptable replies.
+
+### Current status
+
+The current repository contains the automated intent evaluation, but
+**human-vs-LLM judge agreement has not yet been completed**.
+
+It should not be claimed as completed until those ratings are actually
+collected.
+
+------------------------------------------------------------------------
+
+# 11. Baselines
+
+The system should be compared against at least two simpler baselines.
+
+## Baseline 1 --- Trivial baseline
+
+Always predict the most frequent intent.
+
+For response generation, return the most common AppleSupport response
+from the training data.
+
+This establishes a lower bound.
+
+## Baseline 2 --- Simple keyword baseline
+
+Use only keyword matching:
+
+``` text
+battery -> battery_charging
+wifi -> wifi_connectivity
+icloud -> icloud_apple_id
+refund -> app_store_purchases
+macbook -> mac_macos
+```
+
+Then retrieve the first matching historical response.
+
+## Proposed system
+
+The proposed system combines:
+
+``` text
+Intent routing
++
+TF-IDF similarity
++
+Cosine similarity
++
+Domain keyword reranking
+```
+
+### Results table
+
+The final report should contain measured results rather than invented
+numbers:
+
+  -----------------------------------------------------------------------------
+  System                  Intent Accuracy        Reply Quality Notes
+  ------------------ -------------------- -------------------- ----------------
+  Majority/trivial                Measure              Measure Most frequent
+  baseline                                                     class
+
+  Keyword baseline                Measure              Measure Keyword-only
+
+  Proposed TF-IDF +      **71.00% current              Measure Current
+  reranking             intent baseline**                      implementation
+  -----------------------------------------------------------------------------
+
+Do not fill missing metrics with guessed values.
+
+------------------------------------------------------------------------
+
+# 12. Failure Analysis
+
+The current evaluation produced several recurring failure modes.
+
+## Failure Mode 1 --- iOS update vs battery
+
+Example:
+
+``` text
+iOS11 has destroyed my new iPhone SE. Eats battery...
+```
+
+Expected:
+
+``` text
+software_ios
+```
+
+Predicted:
+
+``` text
+battery_charging
+```
+
+### Hypothesis
+
+The word `battery` is a highly strong signal and can override the
+broader software-update context.
+
+### Improvement
+
+Use phrase-level context and give update-related phrases more weight
+when the query explicitly attributes the battery problem to an iOS
+update.
+
+------------------------------------------------------------------------
+
+## Failure Mode 2 --- Notifications vs software update
+
+Example:
+
+``` text
+Messages app starts showing message notifications after upgrade to iOS 11...
+```
+
+Expected:
+
+``` text
+software_ios
+```
+
+Predicted:
+
+``` text
+notifications_messages
+```
+
+### Hypothesis
+
+The query contains multiple valid topics.
+
+### Improvement
+
+Allow multi-intent scoring and select the intent associated with the
+customer's main complaint rather than the first matching keyword.
+
+------------------------------------------------------------------------
+
+## Failure Mode 3 --- Generic messages become unknown
+
+Example:
+
+``` text
+Yes, version 11.1.1
+```
+
+Expected:
+
+``` text
+software_ios
+```
+
+Predicted:
+
+``` text
+unknown
+```
+
+### Hypothesis
+
+Very short replies contain too little lexical information.
+
+### Improvement
+
+Use conversation history instead of classifying isolated tweets.
+
+------------------------------------------------------------------------
+
+## Failure Mode 4 --- Account/security overlap
+
+Example:
+
+``` text
+scammers steal Apple ID
+```
+
+Expected:
+
+``` text
+security_fraud
+```
+
+### Hypothesis
+
+Terms such as `Apple ID`, `password`, and `account` strongly overlap
+with the iCloud/account intent.
+
+### Improvement
+
+Give security/fraud indicators priority over generic account terms.
+
+------------------------------------------------------------------------
+
+## Failure Mode 5 --- App Store refund vs generic refund
+
+Example:
+
+``` text
+I want a refund for an App Store purchase
+```
+
+A pure TF-IDF retrieval can initially return:
+
+``` text
+I want a refund for my laptop
+```
+
+### Hypothesis
+
+`refund` has strong lexical weight but does not identify the
+product/domain.
+
+### Improvement
+
+Use domain-aware reranking so that `App Store`, `purchase`, and `refund`
+jointly outweigh generic `refund` similarity.
+
+------------------------------------------------------------------------
+
+# 13. "What is misleading about my headline number?"
+
+The headline number is currently:
+
+``` text
+71.00% intent accuracy
+```
+
+This number is useful, but it is **not a complete measure of system
+quality**.
+
+There are several reasons:
+
+1.  The golden set was initially keyword-assisted rather than fully
+    human-labelled.
+2.  The metric measures intent routing, not whether the final support
+    reply is helpful.
+3.  Some examples contain multiple legitimate topics, making a
+    single-label taxonomy imperfect.
+4.  A wrong intent can still retrieve a relevant response.
+5.  A correct intent can still retrieve an irrelevant historical
+    response.
+6.  The evaluation set is relatively small compared with the full
+    dataset.
+7.  Social-media messages can be extremely short and ambiguous.
+
+Therefore:
+
+> 71% should be interpreted as a baseline intent-routing measurement,
+> not as "the system gives correct support replies 71% of the time."
+
+A stronger final headline should report separate metrics for:
+
+``` text
+Intent accuracy
+Retrieval relevance
+Groundedness
+Human/LLM reply-quality agreement
+```
+
+------------------------------------------------------------------------
+
+# 14. Installation
+
+## Requirements
+
+Recommended:
+
+-   Windows
+-   Python 3.10+
+-   PowerShell
+-   Git
+
+The project was developed and tested locally with Python 3.14.
+
+------------------------------------------------------------------------
+
+# 15. Complete Setup From Scratch
+
+## Step 1 --- Clone the repository
+
+``` powershell
+git clone <YOUR_GITHUB_REPOSITORY_URL>
+```
+
+Then:
+
+``` powershell
+cd hiver-sde-assignment
+```
+
+------------------------------------------------------------------------
+
+## Step 2 --- Create a virtual environment
+
+``` powershell
+python -m venv venv
+```
+
+This creates:
+
+``` text
+venv/
+```
+
+inside the project.
+
+------------------------------------------------------------------------
+
+## Step 3 --- Activate the virtual environment
+
+PowerShell:
+
+``` powershell
+.\venv\Scripts\Activate.ps1
+```
+
+You should see something similar to:
+
+``` text
+(venv) PS C:\...\hiver-sde-assignment>
+```
+
+If PowerShell blocks activation:
+
+``` powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+Then run:
+
+``` powershell
+.\venv\Scripts\Activate.ps1
+```
+
+------------------------------------------------------------------------
+
+## Step 4 --- Install dependencies
+
+``` powershell
+pip install -r requirements.txt
+```
+
+If FastAPI/Uvicorn are missing:
+
+``` powershell
+pip install fastapi uvicorn
+```
+
+------------------------------------------------------------------------
+
+# 16. Dataset Setup
+
+Download:
+
+https://www.kaggle.com/datasets/thoughtvector/customer-support-on-twitter
+
+Place:
+
+``` text
+twcs.csv
+```
+
+inside:
+
+``` text
+data/
+```
+
+Final path:
+
+``` text
+data/twcs.csv
+```
+
+------------------------------------------------------------------------
+
+# 17. Build Everything From Scratch
+
+Run these commands from the project root.
+
+### Extract AppleSupport
+
+``` powershell
+python src/extract_applesupport.py
+```
+
+### Extract conversations
+
+``` powershell
+python src/extract_applesupport_conversations.py
+```
+
+### Create support pairs
+
+``` powershell
+python src/create_support_pairs.py
+```
+
+### Analyze topics
+
+``` powershell
+python src/topic_analysis.py
+```
+
+### Create golden set
+
+``` powershell
+python src/create_golden_set.py
+```
+
+### Build retriever
+
+``` powershell
+python src/build_retriever.py
+```
+
+### Train baseline intent classifier
+
+``` powershell
+python src/train_intent_classifier.py
+```
+
+### Evaluate
+
+``` powershell
+python src/evaluate_retriever.py
+```
+
+### Analyze errors
+
+``` powershell
+python src/analyze_errors.py
+```
+
+------------------------------------------------------------------------
+
+# 18. Run the Model Directly
+
+From the project root:
+
+``` powershell
+python src/generate_response.py
+```
+
+Enter a query.
+
+## Query 1
+
+``` text
+My iPhone battery is draining very quickly
+```
+
+Expected intent:
+
+``` text
+battery_charging
+```
+
+## Query 2
+
+``` text
+My WiFi keeps disconnecting on my iPhone
+```
+
+Expected intent:
+
+``` text
+wifi_connectivity
+```
+
+## Query 3
+
+``` text
+I can't log into my iCloud account
+```
+
+Expected intent:
+
+``` text
+icloud_apple_id
+```
+
+## Query 4
+
+``` text
+I want a refund for an App Store purchase
+```
+
+Expected intent:
+
+``` text
+app_store_purchases
+```
+
+## Query 5
+
+``` text
+My MacBook is running extremely slowly
+```
+
+Expected intent:
+
+``` text
+mac_macos
+```
+
+## Query 6
+
+``` text
+My iPhone isn't showing notifications for new messages
+```
+
+Expected intent:
+
+``` text
+notifications_messages
+```
+
+## Query 7
+
+``` text
+My iPhone screen is completely black
+```
+
+Expected intent:
+
+``` text
+hardware_device
+```
+
+## Query 8
+
+``` text
+I received a suspicious email asking for my Apple ID password
+```
+
+Expected intent:
+
+``` text
+security_fraud
+```
+
+------------------------------------------------------------------------
+
+# 19. Run the FastAPI Server
+
+If the environment is activated:
+
+``` powershell
+python -m uvicorn src.api:app --reload
+```
+
+You should see:
+
+``` text
+Uvicorn running on http://127.0.0.1:8000
+```
+
+Keep this terminal open.
+
+------------------------------------------------------------------------
+
+# 20. Test the API
+
+Open:
+
+``` text
+http://127.0.0.1:8000
+```
+
+Expected:
+
+``` json
+{
+  "message": "AppleSupport Customer Support API",
+  "status": "running"
+}
+```
+
+------------------------------------------------------------------------
+
+# 21. Swagger UI
+
+Open:
+
+``` text
+http://127.0.0.1:8000/docs
+```
+
+Find:
+
+``` text
+POST /reply
+```
+
+Click:
+
+``` text
+Try it out
+```
+
+Enter:
+
+``` json
+{
+  "query": "I want a refund for an App Store purchase"
+}
+```
+
+Click:
+
+``` text
+Execute
+```
+
+------------------------------------------------------------------------
+
+# 22. Example API Response
+
+A typical response looks like:
+
+``` json
+{
+  "query": "I want a refund for an App Store purchase",
+  "intent": "app_store_purchases",
+  "response": "We'd like to get you pointed in the right direction. You'll want to contact our iTunes Advisors: https://t.co/SDIe7UiyJN",
+  "similarity": 0.3536,
+  "retrieved_issue": "Just got conned into an app store purchase which didnt give me an option to say no. How do I get a refund?"
+}
+```
+
+The exact response and score can vary because retrieval depends on the
+indexed historical examples.
+
+------------------------------------------------------------------------
+
+# 23. Project Structure
 
 ``` text
 hiver-sde-assignment/
-|
+│
 ├── data/
 │   ├── twcs.csv
 │   ├── applesupport_raw.csv
@@ -184,14 +1123,14 @@ hiver-sde-assignment/
 │   ├── applesupport_pairs.csv
 │   ├── golden_set.csv
 │   └── retriever_evaluation.csv
-|
+│
 ├── models/
 │   ├── tfidf_vectorizer.pkl
 │   ├── retriever.pkl
 │   ├── retrieval_data.pkl
 │   ├── intent_vectorizer.pkl
 │   └── intent_classifier.pkl
-|
+│
 ├── src/
 │   ├── extract_applesupport.py
 │   ├── inspect_applesupport.py
@@ -211,297 +1150,15 @@ hiver-sde-assignment/
 │   ├── analyze_errors.py
 │   ├── generate_response.py
 │   └── api.py
-|
+│
 ├── requirements.txt
 ├── README.md
 └── .gitignore
 ```
 
-# Setup
+------------------------------------------------------------------------
 
-## 1. Clone the repository
-
-``` powershell
-git clone <YOUR_GITHUB_REPOSITORY_URL>
-cd hiver-sde-assignment
-```
-
-## 2. Create a virtual environment
-
-``` powershell
-python -m venv venv
-```
-
-## 3. Activate the environment
-
-Windows PowerShell:
-
-``` powershell
-.\venv\Scripts\Activate.ps1
-```
-
-If PowerShell blocks activation:
-
-``` powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-Then:
-
-``` powershell
-.\venv\Scripts\Activate.ps1
-```
-
-## 4. Install dependencies
-
-``` powershell
-pip install -r requirements.txt
-```
-
-If required:
-
-``` powershell
-pip install fastapi uvicorn
-```
-
-# Dataset Setup
-
-Download the Customer Support on Twitter dataset from Kaggle and place
-the original CSV at:
-
-``` text
-data/twcs.csv
-```
-
-Do not commit this large raw dataset to GitHub.
-
-# Running the Data Pipeline
-
-If the processed files and models are already present, you do not need
-to rerun the complete pipeline.
-
-For a fresh setup:
-
-``` powershell
-python src/extract_applesupport.py
-python src/extract_applesupport_conversations.py
-python src/create_support_pairs.py
-python src/topic_analysis.py
-python src/create_golden_set.py
-python src/build_retriever.py
-python src/train_intent_classifier.py
-python src/evaluate_retriever.py
-python src/analyze_errors.py
-```
-
-# Test the Response Generator
-
-Run:
-
-``` powershell
-python src/generate_response.py
-```
-
-Enter a customer query.
-
-## Example 1: Battery
-
-``` text
-My iPhone battery is draining very quickly
-```
-
-Expected intent:
-
-``` text
-battery_charging
-```
-
-## Example 2: Wi-Fi
-
-``` text
-My WiFi keeps disconnecting on my iPhone
-```
-
-Expected intent:
-
-``` text
-wifi_connectivity
-```
-
-## Example 3: iCloud
-
-``` text
-I can't log into my iCloud account
-```
-
-Expected intent:
-
-``` text
-icloud_apple_id
-```
-
-## Example 4: App Store refund
-
-``` text
-I want a refund for an App Store purchase
-```
-
-Expected intent:
-
-``` text
-app_store_purchases
-```
-
-## Example 5: Mac
-
-``` text
-My MacBook is running extremely slowly after the latest update
-```
-
-Expected intent:
-
-``` text
-mac_macos
-```
-
-## Example 6: Messages
-
-``` text
-My iPhone isn't showing any notifications for new messages
-```
-
-Expected intent:
-
-``` text
-notifications_messages
-```
-
-# FastAPI
-
-The project exposes the support system as a REST API.
-
-## Start the API
-
-From the project root:
-
-``` powershell
-python -m uvicorn src.api:app --reload
-```
-
-Server:
-
-``` text
-http://127.0.0.1:8000
-```
-
-## Check the API
-
-Open:
-
-``` text
-http://127.0.0.1:8000
-```
-
-Expected response:
-
-``` json
-{
-  "message": "AppleSupport Customer Support API",
-  "status": "running"
-}
-```
-
-## Swagger Documentation
-
-Open:
-
-``` text
-http://127.0.0.1:8000/docs
-```
-
-Find:
-
-``` text
-POST /reply
-```
-
-Click `Try it out`, enter a query, and click `Execute`.
-
-## API Request
-
-``` json
-{
-  "query": "I want a refund for an App Store purchase"
-}
-```
-
-## API Response
-
-Example:
-
-``` json
-{
-  "query": "I want a refund for an App Store purchase",
-  "intent": "app_store_purchases",
-  "response": "We'd like to get you pointed in the right direction. You'll want to contact our iTunes Advisors: https://t.co/SDIe7UiyJN",
-  "similarity": 0.3536,
-  "retrieved_issue": "Just got conned into an app store purchase which didnt give me an option to say no. How do I get a refund?"
-}
-```
-
-The exact historical response and similarity score may vary.
-
-# Evaluation
-
-A 200-example golden set was used for baseline intent-routing
-evaluation.
-
-Current baseline:
-
-``` text
-Total examples: 200
-Correct: 142
-Incorrect: 58
-Intent accuracy: 71.00%
-```
-
-The errors mainly occur where support topics overlap, including:
-
--   iOS updates vs application problems
--   hardware vs general device issues
--   iCloud vs account/security issues
--   notifications vs software updates
-
-The final system therefore uses intent detection as a routing signal and
-relies on grounded retrieval plus reranking for response selection.
-
-# End-to-End Example
-
-Input:
-
-``` text
-I want a refund for an App Store purchase
-```
-
-Flow:
-
-``` text
-1. Detect intent
-   -> app_store_purchases
-
-2. Retrieve similar AppleSupport cases
-
-3. Rerank candidates using semantic similarity
-   and important domain keywords
-
-4. Select the best historical support response
-
-5. Remove Twitter mentions
-
-6. Return the grounded response through the API
-```
-
-# Technologies
+# 24. Technologies
 
 -   Python
 -   Pandas
@@ -513,62 +1170,117 @@ Flow:
 -   Logistic Regression
 -   FastAPI
 -   Uvicorn
--   Pickle
 -   PowerShell
+-   Git
 
-# Design Decisions
+------------------------------------------------------------------------
 
-## Why retrieval?
+# 25. What I Would Do With One More Week
 
-The dataset contains real AppleSupport responses. Retrieving similar
-historical cases keeps responses grounded and reduces unsupported
-recommendations.
+If given another week, I would prioritize:
 
-## Why TF-IDF?
+### Day 1--2: Better semantic retrieval
 
-TF-IDF is lightweight, fast, interpretable, and suitable for
-keyword-heavy customer-support queries.
+Replace TF-IDF with sentence embeddings and compare:
 
-## Why keyword reranking?
+``` text
+TF-IDF
+vs
+Sentence Transformers
+```
 
-Generic words such as `refund`, `problem`, and `help` can produce poor
-matches. Domain-specific keyword overlap improves matching for areas
-such as App Store, iCloud, Wi-Fi, battery and Mac support.
+This should improve paraphrase matching.
 
-# Limitations
+### Day 3: Cross-encoder reranking
 
-1.  The intent taxonomy is manually defined from topic analysis.
-2.  The golden labels are keyword-assisted and should be human-reviewed
-    for production use.
-3.  TF-IDF is less effective than modern embedding models for heavily
-    paraphrased queries.
-4.  Historical Twitter responses can be short or generic.
-5.  Some historical responses contain external support links.
-6.  The system retrieves grounded historical guidance instead of
-    generating completely novel troubleshooting instructions.
-7.  Some support categories overlap.
+Use a cross-encoder on the top 20 retrieved cases to improve relevance.
 
-# Future Improvements
+### Day 4: Human evaluation
 
--   Replace TF-IDF with sentence embeddings.
--   Add a cross-encoder reranker.
--   Human-validate the complete golden set.
--   Add Recall@K, MRR and Precision@K metrics.
--   Add confidence thresholds and fallback handling.
--   Use an LLM to rewrite retrieved responses while keeping them
-    grounded.
--   Add conversation history.
--   Add response safety/quality filters.
--   Add a frontend dashboard.
--   Containerize the API with Docker.
+Manually label:
 
-# Quick Start
+-   200+ golden examples
+-   50--100 generated replies
 
-For an already-built project:
+Collect human quality scores using the same judge rubric.
+
+### Day 5: LLM grounded generation
+
+Use an LLM only after retrieval and pass the retrieved evidence into the
+prompt.
+
+The model would be explicitly instructed:
+
+``` text
+Do not introduce information that is not supported by the retrieved evidence.
+```
+
+### Day 6: Evaluation
+
+Add:
+
+-   Precision@K
+-   Recall@K
+-   MRR
+-   Reply-quality score
+-   Groundedness score
+-   Hallucination rate
+-   Human/LLM agreement
+
+### Day 7: Production polish
+
+Add:
+
+-   Docker
+-   Better API validation
+-   Logging
+-   Confidence thresholds
+-   Monitoring
+-   A simple support-agent frontend
+
+------------------------------------------------------------------------
+
+# 26. Limitations
+
+-   The current intent taxonomy is manually designed.
+-   The current golden set requires final human validation before being
+    described as fully hand-labelled.
+-   TF-IDF is weaker than embedding-based retrieval for paraphrased
+    queries.
+-   Some Twitter messages are extremely short or ambiguous.
+-   Some historical AppleSupport responses are generic.
+-   Multiple issues can occur in one customer message.
+-   Historical responses may contain Twitter-specific language and
+    links.
+-   The current 71% number measures intent routing, not end-to-end reply
+    quality.
+-   Human-vs-LLM judge agreement has not yet been established in the
+    current implementation.
+
+------------------------------------------------------------------------
+
+# 27. Final Quick Start
+
+After cloning the repository:
 
 ``` powershell
-cd "C:\Games\Code\Z Project\hiver-sde-assignment"
+cd hiver-sde-assignment
+python -m venv venv
 .\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+Make sure:
+
+``` text
+data/twcs.csv
+```
+
+exists.
+
+If the processed data/models are already included:
+
+``` powershell
 python -m uvicorn src.api:app --reload
 ```
 
@@ -586,8 +1298,34 @@ Use:
 }
 ```
 
-Execute `POST /reply`.
+with:
 
-# Author
+``` text
+POST /reply
+```
 
-Developed as part of the Hiver SDE Take-Home Assignment.
+------------------------------------------------------------------------
+
+# 28. Submission Checklist
+
+Before submitting the assignment:
+
+-   [ ] `README.md` is complete.
+-   [ ] `requirements.txt` is present.
+-   [ ] `.gitignore` excludes `venv/` and large raw data.
+-   [ ] API starts successfully.
+-   [ ] `/docs` works.
+-   [ ] `/reply` returns HTTP 200.
+-   [ ] At least 150--250 golden examples exist.
+-   [ ] Golden examples are manually reviewed.
+-   [ ] Evaluation script runs from a clean environment.
+-   [ ] Trivial baseline is measured.
+-   [ ] Keyword baseline is measured.
+-   [ ] Proposed system is measured.
+-   [ ] Reply-quality evaluation is run.
+-   [ ] LLM judge is compared against human ratings.
+-   [ ] Failure analysis contains real examples.
+-   [ ] Headline metric is clearly qualified.
+-   [ ] No fabricated evaluation numbers are included.
+
+------------------------------------------------------------------------
