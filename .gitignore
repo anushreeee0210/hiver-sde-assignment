@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+
+data/twcs.csv
+data/applesupport_raw.csv
+data/applesupport_conversations.csv
+data/applesupport_pairs.csv
+
+.env
