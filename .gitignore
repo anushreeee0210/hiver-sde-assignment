@@ -7,4 +7,6 @@ data/applesupport_raw.csv
 data/applesupport_conversations.csv
 data/applesupport_pairs.csv
 
+process.txt
+
 .env
